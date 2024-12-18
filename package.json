@@ -1,17 +1,17 @@
 {
-  "name": "attendance-tracker",
-  "version": "0.0.1",
+  "name": "hazardous-ticket-bot",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Simple attendance tracker",
+  "description": "Hazardous ticket bot",
   "main": "src/index.js",
   "scripts": {
     "start": "bun run src/index.js",
     "commands": "bun run src/commands.js",
     "dev": "bun --watch run src/index.js",
-    "prod": "pm2 start src/index.js --name attendance-tracker --interpreter bun",
-    "stop": "pm2 stop attendance-tracker",
-    "restart": "pm2 restart attendance-tracker",
-    "logs": "pm2 logs attendance-tracker",
+    "prod": "pm2 start src/index.js --name hazardous-ticket-bot --interpreter bun",
+    "stop": "pm2 stop hazardous-ticket-bot",
+    "restart": "pm2 restart hazardous-ticket-bot",
+    "logs": "pm2 logs hazardous-ticket-bot",
     "status": "pm2 status"
   },
   "dependencies": {
