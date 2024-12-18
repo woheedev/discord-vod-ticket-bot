@@ -1,0 +1,26 @@
+{
+  "name": "attendance-tracker",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Simple attendance tracker",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "bun run src/index.js",
+    "commands": "bun run src/commands.js",
+    "dev": "bun --watch run src/index.js",
+    "prod": "pm2 start src/index.js --name attendance-tracker --interpreter bun",
+    "stop": "pm2 stop attendance-tracker",
+    "restart": "pm2 restart attendance-tracker",
+    "logs": "pm2 logs attendance-tracker",
+    "status": "pm2 status"
+  },
+  "dependencies": {
+    "async-lock": "^1.4.1",
+    "chalk": "^5.3.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
