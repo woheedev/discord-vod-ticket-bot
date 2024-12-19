@@ -107,9 +107,10 @@ const validateReviewThreads = async () => {
       const channel = await client.channels.fetch(review.channelId);
       const thread = await channel.threads.fetch(review.threadId);
 
-      if (!thread || thread.archived) {
-        Logger.warn(`Cleaning up stale review for user ${userId}`);
-        reviewThreads.delete(userId);
+      if (!thread || thread.archived || thread.locked) {
+        review.archived = thread?.archived || true;
+        review.locked = thread?.locked || true;
+        reviewThreads.set(userId, review);
       }
     } catch (error) {
       Logger.error(`Error validating review for user ${userId}: ${error}`);
@@ -540,7 +541,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (action === "close" && review === "review") {
       const reviewData = reviewThreads.get(userId);
-      if (!reviewData || reviewData.archived) {
+      if (!reviewData || reviewData.archived || reviewData.locked) {
         await interaction.reply({
           content: "No active review found.",
           ephemeral: true,
