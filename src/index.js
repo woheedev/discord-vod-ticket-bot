@@ -424,8 +424,12 @@ client.on("ready", async () => {
     if (notificationChannel) {
       const activeReviewsList = await Promise.all(
         Array.from(reviewThreads.entries()).map(async ([userId, review]) => {
-          const user = await mainGuild.members.fetch(userId);
-          return `User: ${user.user.tag}, Thread: <#${review.threadId}>`;
+          try {
+            const user = await mainGuild.members.fetch(userId);
+            return `User: ${user.user.tag}, Thread: <#${review.threadId}>`;
+          } catch (error) {
+            return `User: (Left Server) [${userId}], Thread: <#${review.threadId}>`;
+          }
         })
       );
 
