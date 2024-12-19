@@ -28,7 +28,9 @@ const DRY_RUN = process.env.DRY_RUN === "true";
 const MAIN_SERVER_ID = "1309266911703334952";
 const OPEN_REVIEW_CHANNEL = "1316198871462051900";
 const NOTIFICATIONS_CHANNEL = "1309287447863099486";
+const ANNOUNCEMENTS_CHANNEL = "1309287447863099486";
 const ADMIN_USER_ID = "107391298171891712";
+const LIST_REVIEWS = false;
 
 const reviewThreads = new Map();
 
@@ -71,6 +73,13 @@ const REVIEW_CHANNELS = {
     leadRoleId: "1315188211097534495",
     classRoleIds: ["1315092575509807215", "1315092852690128907"],
   },
+};
+
+const GUILD_ROLES = {
+  GUILD1: { id: "1315072149173698580", name: "Tsunami" },
+  GUILD2: { id: "1315071746721976363", name: "Hurricane" },
+  GUILD3: { id: "1314816353797935214", name: "Avalanche" },
+  GUILD4: { id: "1315072176839327846", name: "Hailstorm" },
 };
 
 const Logger = {
@@ -172,14 +181,38 @@ const handleReviewCreation = async (
         const thread = await reviewChannel.threads.fetch(
           existingReview.threadId
         );
-        if (thread && existingReview.archived) {
+        if (thread && (existingReview.archived || existingReview.locked)) {
           await thread.setArchived(false);
           await thread.setLocked(false);
-          await thread.send({
-            content: `This thread has been reopened by <@${interaction.user.id}>.`,
-            allowedMentions: { users: [] },
-            components: [row],
-          });
+
+          const promises = [
+            thread.members.add(interaction.user.id),
+            thread.send({
+              content: `This thread has been reopened by <@${interaction.user.id}>.`,
+              allowedMentions: { users: [] },
+              components: [row],
+            }),
+          ];
+
+          // Re-add class leads
+          const classLeadRole = interaction.guild.roles.cache.get(
+            matchingClass[1].leadRoleId
+          );
+          if (classLeadRole) {
+            const classLeadMembers = await interaction.guild.members.fetch();
+            const leadMembers = classLeadMembers.filter((member) =>
+              member.roles.cache.has(classLeadRole.id)
+            );
+
+            promises.push(
+              ...leadMembers.map((member) =>
+                retryOperation(() => thread.members.add(member.id))
+              )
+            );
+          }
+
+          await Promise.all(promises);
+
           Logger.thread(
             `Reopened review thread for ${interaction.user.tag}: ${thread.name}`
           );
@@ -191,6 +224,7 @@ const handleReviewCreation = async (
             className: matchingClass[0],
             leadRoleId: matchingClass[1].leadRoleId,
             archived: false,
+            locked: false,
           });
 
           Logger.info(
@@ -260,6 +294,7 @@ const handleReviewCreation = async (
         className: matchingClass[0],
         leadRoleId: matchingClass[1].leadRoleId,
         archived: false,
+        locked: false,
       });
 
       await channel.send({
@@ -305,6 +340,7 @@ const handleReviewClosure = async (thread, interaction) => {
     const review = reviewThreads.get(interaction.user.id);
     if (review) {
       review.archived = true;
+      review.locked = true;
       reviewThreads.set(interaction.user.id, review);
     }
   } catch (error) {
@@ -421,7 +457,7 @@ client.on("ready", async () => {
     const notificationChannel = mainGuild.channels.cache.get(
       NOTIFICATIONS_CHANNEL
     );
-    if (notificationChannel) {
+    if (notificationChannel && LIST_REVIEWS) {
       const activeReviewsList = await Promise.all(
         Array.from(reviewThreads.entries()).map(async ([userId, review]) => {
           try {
@@ -434,7 +470,9 @@ client.on("ready", async () => {
       );
 
       if (activeReviewsList.length === 0) {
-        await notificationChannel.send({ content: "No active reviews found." });
+        await notificationChannel.send({
+          content: "No active reviews found.",
+        });
       } else {
         // Split into chunks of ~1900 chars to stay well under Discord's 2000 limit
         const chunks = ["Active Reviews Detected:"];
@@ -533,7 +571,11 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         await handleReviewClosure(thread, interaction);
-        reviewThreads.set(userId, { ...reviewData, archived: true });
+        reviewThreads.set(userId, {
+          ...reviewData,
+          archived: true,
+          locked: true,
+        });
       } catch (error) {
         await interaction.reply({
           content: "There was an error closing the review thread.",
@@ -576,6 +618,117 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
     }
+  }
+});
+
+async function checkGuildMembersWithoutReviews(guild) {
+  const membersWithGuildRoles = new Set();
+
+  // Get all members with any guild role
+  const guildRoleIds = Object.values(GUILD_ROLES).map((role) => role.id);
+  const allMembers = await guild.members.fetch();
+
+  allMembers.forEach((member) => {
+    if (member.user.bot) return;
+    if (guildRoleIds.some((roleId) => member.roles.cache.has(roleId))) {
+      membersWithGuildRoles.add(member.id);
+    }
+  });
+
+  // Filter out members who already have review threads
+  const membersWithoutReviews = [];
+  for (const memberId of membersWithGuildRoles) {
+    const review = reviewThreads.get(memberId);
+    if (!review || review.archived) {
+      try {
+        const member = await guild.members.fetch(memberId);
+        membersWithoutReviews.push({
+          id: memberId,
+          tag: member.user.tag,
+          displayName: member.displayName,
+        });
+      } catch (error) {
+        Logger.error(`Error fetching member ${memberId}: ${error}`);
+      }
+    }
+  }
+
+  return membersWithoutReviews;
+}
+
+const sendMembersWithoutReviews = async (guild, channel, message) => {
+  await message.reply("Checking for members without review threads...");
+  const membersWithoutReviews = await checkGuildMembersWithoutReviews(guild);
+
+  if (membersWithoutReviews.length === 0) {
+    await channel.send({
+      content: "All guild members have active review threads! 🎉",
+    });
+    return;
+  }
+
+  const chunks = membersWithoutReviews
+    .map((m) => `<@${m.id}>`)
+    .reduce((acc, mention) => {
+      if (!acc.length || (acc[acc.length - 1] + mention).length > 1900) {
+        acc.push(mention);
+      } else {
+        acc[acc.length - 1] += `, ${mention}`;
+      }
+      return acc;
+    }, []);
+
+  await channel.send({
+    content: "**Guild members without review threads:**",
+  });
+
+  for (const chunk of chunks) {
+    await channel.send({
+      content: chunk,
+      allowedMentions: { parse: ["users"] },
+    });
+  }
+
+  Logger.info(
+    `Notified about ${membersWithoutReviews.length} members without reviews`
+  );
+};
+
+client.on("messageCreate", async (message) => {
+  const command = message.content.toLowerCase();
+  if (!command.startsWith("!notify")) return;
+
+  if (!message.member.permissions.has("Administrator")) {
+    await message.reply({
+      content: "You need Administrator permission to use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  try {
+    const guild = message.guild;
+    let targetChannel;
+
+    if (command === "!notifyopen") {
+      targetChannel = guild.channels.cache.get(ANNOUNCEMENTS_CHANNEL);
+    } else if (command === "!notifytest") {
+      targetChannel = guild.channels.cache.get(NOTIFICATIONS_CHANNEL);
+    } else {
+      return;
+    }
+
+    if (!targetChannel) {
+      await message.reply("Target channel not found!");
+      return;
+    }
+
+    await sendMembersWithoutReviews(guild, targetChannel, message);
+  } catch (error) {
+    Logger.error(`Error in notify command: ${error}`);
+    await message.reply(
+      "There was an error checking for members without reviews."
+    );
   }
 });
 
