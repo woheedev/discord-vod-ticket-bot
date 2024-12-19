@@ -29,7 +29,6 @@ const MAIN_SERVER_ID = "1309266911703334952";
 const OPEN_REVIEW_CHANNEL = "1316198871462051900";
 const NOTIFICATIONS_CHANNEL = "1309287447863099486";
 const ADMIN_USER_ID = "107391298171891712";
-const SKIP_MIGRATION = process.env.SKIP_MIGRATION === "true";
 
 const reviewThreads = new Map();
 
@@ -121,53 +120,6 @@ async function retryOperation(operation, maxRetries = 3) {
     }
   }
 }
-
-const migrateThreadName = async (thread, dryRun = true) => {
-  const match = thread.name.match(/^(.+) - (.+) Review$/);
-  if (!match) return null;
-
-  const [, displayName, classRole] = match;
-  const guildMembers = await thread.guild.members.fetch();
-  const user = guildMembers.find(
-    (member) =>
-      member.nickname === displayName || member.user.username === displayName
-  );
-
-  const newThreadName = user
-    ? formatThreadName(displayName, classRole, user.id)
-    : formatThreadName(displayName, classRole, "MISSING");
-
-  if (dryRun) {
-    Logger.info(`[DRY RUN] Would rename thread:
-    From: ${thread.name}
-    To: ${newThreadName}
-    UserID: ${user ? user.id : "MISSING"}`);
-    return {
-      oldName: thread.name,
-      newName: newThreadName,
-      userId: user ? user.id : "MISSING",
-      userFound: !!user,
-    };
-  }
-
-  try {
-    await retryOperation(() => thread.setName(newThreadName));
-    Logger.thread(`Successfully migrated thread: ${newThreadName}`);
-    if (thread.autoArchiveDuration !== 10080) {
-      await retryOperation(() => thread.setAutoArchiveDuration(10080));
-      Logger.thread(`Updated autoArchiveDuration for thread: ${newThreadName}`);
-    }
-    return {
-      oldName: thread.name,
-      newName: newThreadName,
-      userId: user ? user.id : "MISSING",
-      userFound: !!user,
-    };
-  } catch (error) {
-    Logger.error(`Error migrating thread ${thread.name}: ${error}`);
-    return null;
-  }
-};
 
 const isReviewChannel = (channelId) => {
   return Object.values(REVIEW_CHANNELS).some(
@@ -370,50 +322,6 @@ client.on("ready", async () => {
   try {
     const mainGuild = await client.guilds.fetch(MAIN_SERVER_ID);
 
-    if (!SKIP_MIGRATION) {
-      Logger.info("Starting thread name migration...");
-      const migrationResults = [];
-
-      for (const [className, channelData] of Object.entries(REVIEW_CHANNELS)) {
-        const channel = mainGuild.channels.cache.get(channelData.channelId);
-        if (!channel) continue;
-
-        Logger.info(`Checking channel: ${channel.name}`);
-
-        const [activeThreads, archivedThreads] = await Promise.all([
-          channel.threads.fetchActive(),
-          channel.threads.fetchArchived({
-            fetchAll: true,
-            type: "private",
-          }),
-        ]);
-
-        const allThreads = [
-          ...activeThreads.threads.values(),
-          ...archivedThreads.threads.values(),
-        ];
-
-        Logger.info(
-          `Found ${allThreads.length} total threads in ${channel.name}`
-        );
-
-        for (const thread of allThreads) {
-          if (!thread.name.includes("[")) {
-            const result = await migrateThreadName(thread, DRY_RUN);
-            if (result) {
-              migrationResults.push({ ...result, channelId: channel.id });
-            }
-          }
-        }
-      }
-
-      Logger.info("\nMigration Summary:");
-      Logger.info(`Total threads checked: ${migrationResults.length}`);
-      Logger.info(
-        `Detailed results: ${JSON.stringify(migrationResults, null, 2)}`
-      );
-    }
-
     const reviewChannel = mainGuild.channels.cache.get(OPEN_REVIEW_CHANNEL);
 
     if (reviewChannel) {
@@ -521,13 +429,27 @@ client.on("ready", async () => {
         })
       );
 
-      await notificationChannel.send({
-        content: `Active Reviews Detected:\n${
-          activeReviewsList.length
-            ? activeReviewsList.join("\n")
-            : "No active reviews found."
-        }`,
-      });
+      if (activeReviewsList.length === 0) {
+        await notificationChannel.send({ content: "No active reviews found." });
+      } else {
+        // Split into chunks of ~1900 chars to stay well under Discord's 2000 limit
+        const chunks = ["Active Reviews Detected:"];
+        let currentChunk = 0;
+
+        for (const review of activeReviewsList) {
+          if (chunks[currentChunk].length + review.length + 1 > 1900) {
+            currentChunk++;
+            chunks[currentChunk] = "";
+          }
+          chunks[currentChunk] += "\n" + review;
+        }
+
+        // Send each chunk as separate message
+        for (const chunk of chunks) {
+          await notificationChannel.send({ content: chunk });
+          Logger.info(`Sent reviews chunk of length: ${chunk.length}`);
+        }
+      }
     }
   } catch (error) {
     Logger.error(`Error during ready event: ${error}`);
@@ -669,13 +591,12 @@ client.on("threadUpdate", async (oldThread, newThread) => {
       `User ${executor.tag} (${executor.id}) attempted to rename thread ${oldThread.name} to ${newThread.name}`
     );
     try {
-      await newThread.setName(oldThread.name);
       await newThread.send({
-        content: `Thread name changes are restricted to bot and administrators only.\nAttempted by: <@${executor.id}> (${executor.tag})`,
-        allowedMentions: { users: [] },
+        content: `Thread name changes are restricted to bot and administrators only.\nAttempted by: <@${executor.id}> (${executor.tag})\n<@107391298171891712> please revert this change.`,
+        allowedMentions: { users: ["107391298171891712"] },
       });
     } catch (error) {
-      Logger.error(`Error reverting thread name change: ${error}`);
+      Logger.error(`Error sending warning message: ${error}`);
     }
   }
 });
