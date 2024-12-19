@@ -4,7 +4,7 @@ import chalk from "chalk";
 
 dotenv.config();
 
-const requiredEnvVars = ["MIGRATION_TOKEN", "DRY_RUN"];
+const requiredEnvVars = ["TOKEN", "DRY_RUN"];
 requiredEnvVars.forEach((varName) => {
   if (!process.env[varName]) {
     throw new Error(`Missing required environment variable: ${varName}`);
@@ -297,4 +297,4 @@ client.on("ready", async () => {
   client.destroy();
 });
 
-client.login(process.env.MIGRATION_TOKEN);
+client.login(process.env.TOKEN);
