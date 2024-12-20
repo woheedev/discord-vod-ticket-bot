@@ -31,6 +31,7 @@ const NOTIFICATIONS_CHANNEL = "1309287447863099486";
 const ANNOUNCEMENTS_CHANNEL = "1309287447863099486";
 const ADMIN_USER_ID = "107391298171891712";
 const LIST_REVIEWS = false;
+const FILTER_ROLE_IDS = ["1309271313398894643", "1309284427553312769"]; // Leadership & Officer
 
 const reviewThreads = new Map();
 
@@ -631,6 +632,8 @@ async function checkGuildMembersWithoutReviews(guild) {
 
   allMembers.forEach((member) => {
     if (member.user.bot) return;
+    if (FILTER_ROLE_IDS.some((roleId) => member.roles.cache.has(roleId)))
+      return; // Skip filtered roles
     if (guildRoleIds.some((roleId) => member.roles.cache.has(roleId))) {
       membersWithGuildRoles.add(member.id);
     }
@@ -686,7 +689,8 @@ const sendMembersWithoutReviews = async (guild, channel, message) => {
   for (const chunk of chunks) {
     await channel.send({
       content: chunk,
-      allowedMentions: { parse: ["users"] },
+      //allowedMentions: { parse: ["users"] },
+      allowedMentions: { users: [] },
     });
   }
 
