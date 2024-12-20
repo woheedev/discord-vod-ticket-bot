@@ -660,7 +660,12 @@ async function checkGuildMembersWithoutReviews(guild) {
   return membersWithoutReviews;
 }
 
-const sendMembersWithoutReviews = async (guild, channel, message) => {
+const sendMembersWithoutReviews = async (
+  guild,
+  channel,
+  message,
+  shouldMention = false
+) => {
   await message.reply("Checking for members without review threads...");
   const membersWithoutReviews = await checkGuildMembersWithoutReviews(guild);
 
@@ -689,8 +694,7 @@ const sendMembersWithoutReviews = async (guild, channel, message) => {
   for (const chunk of chunks) {
     await channel.send({
       content: chunk,
-      //allowedMentions: { parse: ["users"] },
-      allowedMentions: { users: [] },
+      allowedMentions: shouldMention ? { parse: ["users"] } : { users: [] },
     });
   }
 
@@ -714,9 +718,11 @@ client.on("messageCreate", async (message) => {
   try {
     const guild = message.guild;
     let targetChannel;
+    let shouldMention = false;
 
-    if (command === "!notifyopen") {
+    if (command === "!notifythreads") {
       targetChannel = guild.channels.cache.get(ANNOUNCEMENTS_CHANNEL);
+      shouldMention = true;
     } else if (command === "!notifytest") {
       targetChannel = guild.channels.cache.get(NOTIFICATIONS_CHANNEL);
     } else {
@@ -728,7 +734,12 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    await sendMembersWithoutReviews(guild, targetChannel, message);
+    await sendMembersWithoutReviews(
+      guild,
+      targetChannel,
+      message,
+      shouldMention
+    );
   } catch (error) {
     Logger.error(`Error in notify command: ${error}`);
     await message.reply(
