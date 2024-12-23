@@ -99,6 +99,7 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildPresences,
   ],
 });
 
@@ -634,6 +635,12 @@ const getReviewThreadsByLeadRole = (leadRoleId) => {
 const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
   const relevantThreads = getReviewThreadsByLeadRole(leadRoleId);
 
+  Logger.info(
+    `Starting thread access updates for ${member.user.tag} (${
+      shouldAdd ? "adding to" : "removing from"
+    } threads)`
+  );
+
   await Promise.all(
     relevantThreads.map(async (review) => {
       try {
@@ -642,7 +649,6 @@ const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
 
         if (!thread) return;
 
-        // Check current membership
         const threadMember = await thread.members
           .fetch(member.id)
           .catch(() => null);
@@ -661,6 +667,8 @@ const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
       }
     })
   );
+
+  Logger.info(`Completed thread access updates for ${member.user.tag}`);
 };
 
 async function checkGuildMembersWithoutReviews(guild) {
@@ -860,11 +868,9 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
     const hasRole = newMember.roles.cache.has(channelData.leadRoleId);
 
     if (!hadRole && hasRole) {
-      // Role added
       Logger.info(`${newMember.user.tag} gained ${className} lead role`);
       await updateThreadAccess(newMember, channelData.leadRoleId, true);
     } else if (hadRole && !hasRole) {
-      // Role removed
       Logger.info(`${newMember.user.tag} lost ${className} lead role`);
       await updateThreadAccess(newMember, channelData.leadRoleId, false);
     }
