@@ -623,6 +623,38 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+const getReviewThreadsByLeadRole = (leadRoleId) => {
+  return Array.from(reviewThreads.values()).filter(
+    (review) =>
+      review.leadRoleId === leadRoleId && !review.archived && !review.locked
+  );
+};
+
+const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
+  const relevantThreads = getReviewThreadsByLeadRole(leadRoleId);
+
+  for (const review of relevantThreads) {
+    try {
+      const channel = await client.channels.fetch(review.channelId);
+      const thread = await channel.threads.fetch(review.threadId);
+
+      if (thread) {
+        if (shouldAdd) {
+          await retryOperation(() => thread.members.add(member.id));
+          Logger.info(`Added ${member.user.tag} to thread ${thread.name}`);
+        } else {
+          await retryOperation(() => thread.members.remove(member.id));
+          Logger.info(`Removed ${member.user.tag} from thread ${thread.name}`);
+        }
+      }
+    } catch (error) {
+      Logger.error(
+        `Error updating thread access for ${member.user.tag}: ${error}`
+      );
+    }
+  }
+};
+
 async function checkGuildMembersWithoutReviews(guild) {
   const membersWithGuildRoles = new Set();
 
@@ -783,6 +815,24 @@ client.on("threadDelete", async (thread) => {
       Logger.info(
         `Removed review thread for user ${userId} from reviewThreads map due to thread deletion.`
       );
+    }
+  }
+});
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  // Check each review channel's lead role
+  for (const [className, channelData] of Object.entries(REVIEW_CHANNELS)) {
+    const hadRole = oldMember.roles.cache.has(channelData.leadRoleId);
+    const hasRole = newMember.roles.cache.has(channelData.leadRoleId);
+
+    if (!hadRole && hasRole) {
+      // Role added
+      Logger.info(`${newMember.user.tag} gained ${className} lead role`);
+      await updateThreadAccess(newMember, channelData.leadRoleId, true);
+    } else if (hadRole && !hasRole) {
+      // Role removed
+      Logger.info(`${newMember.user.tag} lost ${className} lead role`);
+      await updateThreadAccess(newMember, channelData.leadRoleId, false);
     }
   }
 });
