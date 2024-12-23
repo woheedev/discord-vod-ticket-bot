@@ -456,6 +456,8 @@ client.on("ready", async () => {
 
     Logger.info("All reviews populated from existing threads");
 
+    // await syncLeadRoleAccess(mainGuild); // Sync lead role access for all review channels
+
     const notificationChannel = mainGuild.channels.cache.get(
       NOTIFICATIONS_CHANNEL
     );
@@ -625,34 +627,40 @@ client.on("interactionCreate", async (interaction) => {
 
 const getReviewThreadsByLeadRole = (leadRoleId) => {
   return Array.from(reviewThreads.values()).filter(
-    (review) =>
-      review.leadRoleId === leadRoleId && !review.archived && !review.locked
+    (review) => review.leadRoleId === leadRoleId
   );
 };
 
 const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
   const relevantThreads = getReviewThreadsByLeadRole(leadRoleId);
 
-  for (const review of relevantThreads) {
-    try {
-      const channel = await client.channels.fetch(review.channelId);
-      const thread = await channel.threads.fetch(review.threadId);
+  await Promise.all(
+    relevantThreads.map(async (review) => {
+      try {
+        const channel = await client.channels.fetch(review.channelId);
+        const thread = await channel.threads.fetch(review.threadId);
 
-      if (thread) {
-        if (shouldAdd) {
+        if (!thread) return;
+
+        // Check current membership
+        const threadMember = await thread.members
+          .fetch(member.id)
+          .catch(() => null);
+
+        if (shouldAdd && !threadMember) {
           await retryOperation(() => thread.members.add(member.id));
           Logger.info(`Added ${member.user.tag} to thread ${thread.name}`);
-        } else {
+        } else if (!shouldAdd && threadMember) {
           await retryOperation(() => thread.members.remove(member.id));
           Logger.info(`Removed ${member.user.tag} from thread ${thread.name}`);
         }
+      } catch (error) {
+        Logger.error(
+          `Error updating thread access for ${member.user.tag}: ${error}`
+        );
       }
-    } catch (error) {
-      Logger.error(
-        `Error updating thread access for ${member.user.tag}: ${error}`
-      );
-    }
-  }
+    })
+  );
 };
 
 async function checkGuildMembersWithoutReviews(guild) {
@@ -818,6 +826,32 @@ client.on("threadDelete", async (thread) => {
     }
   }
 });
+
+const syncLeadRoleAccess = async (guild) => {
+  Logger.info("Starting lead role access sync...");
+
+  try {
+    const members = await guild.members.fetch();
+
+    for (const [className, channelData] of Object.entries(REVIEW_CHANNELS)) {
+      const leadMembers = members.filter((member) =>
+        member.roles.cache.has(channelData.leadRoleId)
+      );
+
+      if (leadMembers.size > 0) {
+        Logger.info(`Found ${leadMembers.size} leads for ${className}`);
+
+        for (const [, member] of leadMembers) {
+          await updateThreadAccess(member, channelData.leadRoleId, true);
+        }
+      }
+    }
+
+    Logger.info("Lead role access sync completed");
+  } catch (error) {
+    Logger.error(`Error during lead role sync: ${error}`);
+  }
+};
 
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   // Check each review channel's lead role
