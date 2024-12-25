@@ -4,14 +4,12 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
   AuditLogEvent,
 } from "discord.js";
 import * as dotenv from "dotenv";
 import AsyncLock from "async-lock";
 import chalk from "chalk";
+import { initializeDb, getIngameName } from "./db.js";
 
 dotenv.config();
 const lock = new AsyncLock();
@@ -143,24 +141,6 @@ const isReviewChannel = (channelId) => {
 
 const formatThreadName = (displayName, classRole, userId) => {
   return `${displayName} - ${classRole} Review [${userId}]`;
-};
-
-const createIngameNameModal = (prefill) => {
-  const modal = new ModalBuilder()
-    .setCustomId("ingame_name_modal")
-    .setTitle("What is your in-game name?");
-
-  const ingameNameInput = new TextInputBuilder()
-    .setCustomId("ingame_name")
-    .setLabel("In-Game Name:")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMinLength(1)
-    .setMaxLength(32)
-    .setValue(prefill);
-
-  modal.addComponents(new ActionRowBuilder().addComponents(ingameNameInput));
-  return modal;
 };
 
 const handleReviewCreation = async (
@@ -361,6 +341,13 @@ client.on("ready", async () => {
   if (DRY_RUN) Logger.info("Running in DRY RUN mode");
 
   try {
+    await initializeDb();
+    Logger.info("Database connected");
+  } catch (error) {
+    Logger.error(`Database connection failed: ${error.message}`);
+  }
+
+  try {
     const mainGuild = await client.guilds.fetch(MAIN_SERVER_ID);
 
     const reviewChannel = mainGuild.channels.cache.get(OPEN_REVIEW_CHANNEL);
@@ -539,8 +526,38 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      const prefill = interaction.member.nickname || interaction.user.username;
-      await interaction.showModal(createIngameNameModal(prefill));
+      const ingameName = await getIngameName(interaction.user.id);
+      if (!ingameName) {
+        await interaction.reply({
+          content:
+            "You need to set your in-game name first: https://discord.com/channels/1309266911703334952/1309279173566664714/1319551325452898386",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const [, channelData] = matchingClass;
+      const channel = interaction.guild.channels.cache.get(
+        channelData.channelId
+      );
+
+      try {
+        const thread = await handleReviewCreation(
+          interaction,
+          matchingClass,
+          channel,
+          ingameName
+        );
+        await interaction.reply({
+          content: `New review thread created: <#${thread.id}>`,
+          ephemeral: true,
+        });
+      } catch (error) {
+        await interaction.reply({
+          content: "There was an error creating the review thread.",
+          ephemeral: true,
+        });
+      }
     }
 
     const [action, review, userId] = interaction.customId.split("_");
@@ -586,41 +603,6 @@ client.on("interactionCreate", async (interaction) => {
       } catch (error) {
         await interaction.reply({
           content: "There was an error closing the review thread.",
-          ephemeral: true,
-        });
-      }
-    }
-  }
-
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId === "ingame_name_modal") {
-      const ingameName = interaction.fields.getTextInputValue("ingame_name");
-
-      const userRoles = interaction.member.roles.cache;
-      const matchingClass = Object.entries(REVIEW_CHANNELS).find(
-        ([, channelData]) =>
-          channelData.classRoleIds.some((roleId) => userRoles.has(roleId))
-      );
-
-      const [, channelData] = matchingClass;
-      const channel = interaction.guild.channels.cache.get(
-        channelData.channelId
-      );
-
-      try {
-        const thread = await handleReviewCreation(
-          interaction,
-          matchingClass,
-          channel,
-          ingameName
-        );
-        await interaction.reply({
-          content: `New review thread created: <#${thread.id}>`,
-          ephemeral: true,
-        });
-      } catch (error) {
-        await interaction.reply({
-          content: "There was an error creating the review thread.",
           ephemeral: true,
         });
       }

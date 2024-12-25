@@ -19,7 +19,9 @@
     "async-lock": "^1.4.1",
     "chalk": "^5.3.0",
     "discord.js": "^14.16.3",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7"
   },
   "engines": {
     "bun": ">=1.0.0"
