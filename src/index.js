@@ -16,6 +16,8 @@ import chalk from "chalk";
 dotenv.config();
 const lock = new AsyncLock();
 const REVIEW_LOCK_KEY = "review_operations";
+const roleUpdateLocks = new AsyncLock();
+const ROLE_UPDATE_LOCK_PREFIX = "role_update_";
 
 const requiredEnvVars = ["TOKEN", "DRY_RUN"];
 requiredEnvVars.forEach((varName) => {
@@ -633,21 +635,44 @@ const getReviewThreadsByLeadRole = (leadRoleId) => {
 };
 
 const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
-  const relevantThreads = getReviewThreadsByLeadRole(leadRoleId);
+  const lockKey = `${ROLE_UPDATE_LOCK_PREFIX}${member.id}`;
 
-  Logger.info(
-    `Starting thread access updates for ${member.user.tag} (${
-      shouldAdd ? "adding to" : "removing from"
-    } threads)`
-  );
+  return await roleUpdateLocks.acquire(lockKey, async () => {
+    const relevantThreads = getReviewThreadsByLeadRole(leadRoleId);
+    const startTime = Date.now();
 
-  await Promise.all(
-    relevantThreads.map(async (review) => {
+    Logger.info(
+      `Starting thread access updates for ${member.user.tag} (${
+        shouldAdd ? "adding to" : "removing from"
+      } threads)`
+    );
+
+    let completed = [];
+
+    for (const review of relevantThreads) {
       try {
+        // Check if operation was superseded
+        const currentMember = await member.guild.members.fetch(member.id);
+        const hasRoleNow = currentMember.roles.cache.has(leadRoleId);
+        if (hasRoleNow !== shouldAdd) {
+          Logger.info(
+            `Role state changed mid-operation for ${member.user.tag}, reversing completed changes`
+          );
+
+          // Reverse completed operations
+          for (const { thread, wasAdded } of completed) {
+            if (wasAdded) {
+              await retryOperation(() => thread.members.remove(member.id));
+            } else {
+              await retryOperation(() => thread.members.add(member.id));
+            }
+          }
+          return;
+        }
+
         const channel = await client.channels.fetch(review.channelId);
         const thread = await channel.threads.fetch(review.threadId);
-
-        if (!thread) return;
+        if (!thread) continue;
 
         const threadMember = await thread.members
           .fetch(member.id)
@@ -655,9 +680,11 @@ const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
 
         if (shouldAdd && !threadMember) {
           await retryOperation(() => thread.members.add(member.id));
+          completed.push({ thread, wasAdded: true });
           Logger.info(`Added ${member.user.tag} to thread ${thread.name}`);
         } else if (!shouldAdd && threadMember) {
           await retryOperation(() => thread.members.remove(member.id));
+          completed.push({ thread, wasAdded: false });
           Logger.info(`Removed ${member.user.tag} from thread ${thread.name}`);
         }
       } catch (error) {
@@ -665,10 +692,14 @@ const updateThreadAccess = async (member, leadRoleId, shouldAdd) => {
           `Error updating thread access for ${member.user.tag}: ${error}`
         );
       }
-    })
-  );
+    }
 
-  Logger.info(`Completed thread access updates for ${member.user.tag}`);
+    Logger.info(
+      `Completed thread access updates for ${member.user.tag} in ${
+        Date.now() - startTime
+      }ms`
+    );
+  });
 };
 
 async function checkGuildMembersWithoutReviews(guild) {
