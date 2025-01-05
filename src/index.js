@@ -10,7 +10,7 @@ import * as dotenv from "dotenv";
 import AsyncLock from "async-lock";
 import { debounce } from "lodash-es";
 
-import { initializeDb, getIngameName, bulkGetIngameNames } from "./utils/db.js";
+import { initializeDb, getIngameName } from "./utils/db.js";
 import { Logger } from "./utils/logger.js";
 
 dotenv.config();
@@ -706,11 +706,19 @@ const updateThreadWeaponLeads = async (
 };
 
 const handleThreadRename = async (thread, userId, weaponRole) => {
-  const ingameName =
-    (await getIngameName(userId)) ||
-    (await thread.guild.members.fetch(userId)).displayName;
+  const ingameName = await getIngameName(userId);
+  if (ingameName === undefined) {
+    Logger.warn(
+      `Failed to fetch ingame name for ${userId} from database, skipping thread rename`
+    );
+    return false;
+  }
 
-  const newName = formatThreadName(ingameName, weaponRole.name, userId);
+  const displayName =
+    ingameName === null
+      ? (await thread.guild.members.fetch(userId)).displayName
+      : ingameName;
+  const newName = formatThreadName(displayName, weaponRole.name, userId);
   if (thread.name === newName) return false;
 
   await thread.setName(newName);
@@ -861,18 +869,16 @@ client.on("ready", async () => {
   try {
     await initializeDb();
     Logger.info("Database connected");
+  } catch (error) {
+    Logger.error(`Database connection failed: ${error.message}`);
+  }
 
+  try {
     const mainGuild = await client.guilds.fetch(MAIN_SERVER_ID);
     if (!mainGuild) {
       Logger.error("Could not find main guild");
       return;
     }
-
-    // Pre-cache ingame names for all guild members
-    const allMembers = await mainGuild.members.fetch();
-    const memberIds = Array.from(allMembers.keys());
-    await bulkGetIngameNames(memberIds);
-    Logger.info("Pre-cached ingame names for guild members");
 
     const reviewChannel = mainGuild.channels.cache.get(OPEN_REVIEW_CHANNEL);
     if (reviewChannel) {
@@ -1103,7 +1109,7 @@ client.on("ready", async () => {
           isValidating = false;
         }, 10 * 60 * 1000);
       }
-    }, 5 * 60 * 1000);
+    }, 6 * 60 * 60 * 1000); // Run every 6 hours
 
     // Single cleanup interval for all temporary state
     setInterval(() => {
@@ -1128,7 +1134,7 @@ client.on("ready", async () => {
           Logger.info(`Cleaned up stale review for ${userId}`);
         }
       }
-    }, 15 * 60 * 1000); // Run cleanup every 15 minutes
+    }, 24 * 60 * 60 * 1000); // Run once per day
 
     // Clear any existing state on startup
     pendingUpdates.clear();
@@ -1271,7 +1277,15 @@ const handleOpenReviewButton = async (interaction) => {
   }
 
   const ingameName = await getIngameName(userId);
-  if (!ingameName) {
+  if (ingameName === undefined) {
+    await interaction.editReply({
+      content:
+        "Failed to fetch your in-game name from the database. Please try again later.",
+    });
+    return;
+  }
+
+  if (ingameName === null) {
     await interaction.editReply({
       content:
         "You need to set your in-game name first: https://discord.com/channels/1309266911703334952/1309279173566664714/1319551325452898386",
@@ -2077,10 +2091,21 @@ const createClassChannelEmbed = async (guild, channelId, className) => {
         REVIEW_CHANNELS[className].classRoleIds.includes(role.id)
       );
 
+      const ingameName = await getIngameName(userId);
+      // Skip this review if we failed to fetch from database
+      if (ingameName === undefined) {
+        Logger.warn(
+          `Failed to fetch ingame name for ${userId} from database, skipping in embed`
+        );
+        return null;
+      }
+
+      const displayName = ingameName === null ? member.displayName : ingameName;
+
       return {
         userId,
         threadId: review.threadId,
-        ingameName: (await getIngameName(userId)) || member.displayName,
+        ingameName: displayName,
         weaponRole: weaponRole?.name || "Unknown",
         weaponRoleId: weaponRole?.id || "0",
         createdAt: thread.createdTimestamp,
